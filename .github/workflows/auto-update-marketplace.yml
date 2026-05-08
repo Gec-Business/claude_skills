@@ -1,0 +1,93 @@
+name: Auto-update marketplace
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+      - '!plugins/**/.claude-plugin/**'
+
+permissions:
+  contents: write
+
+jobs:
+  update-marketplace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate plugin.json files for new plugins
+        run: |
+          for plugin_dir in plugins/*/; do
+            plugin_name=$(basename "$plugin_dir")
+            plugin_json="${plugin_dir}.claude-plugin/plugin.json"
+            
+            if [ ! -f "$plugin_json" ]; then
+              mkdir -p "${plugin_dir}.claude-plugin"
+              cat > "$plugin_json" <<EOF
+          {
+            "name": "$plugin_name",
+            "version": "1.0.0",
+            "description": "Auto-generated plugin: $plugin_name"
+          }
+          EOF
+              echo "Created $plugin_json"
+            fi
+          done
+
+      - name: Rebuild marketplace.json from current plugins
+        run: |
+          mkdir -p .claude-plugin
+          
+          plugins_json="["
+          first=true
+          
+          for plugin_dir in plugins/*/; do
+            plugin_name=$(basename "$plugin_dir")
+            description="Auto-added skill: $plugin_name"
+            
+            if [ "$first" = true ]; then
+              first=false
+            else
+              plugins_json+=","
+            fi
+            
+            plugins_json+=$(cat <<EOF
+          {
+            "source": "./plugins/$plugin_name",
+            "name": "$plugin_name",
+            "description": "$description"
+          }
+          EOF
+          )
+          done
+          
+          plugins_json+="]"
+          
+          cat > .claude-plugin/marketplace.json <<EOF
+          {
+            "name": "gec-skills-marketplace",
+            "owner": {
+              "name": "GEC Business"
+            },
+            "plugins": $plugins_json
+          }
+          EOF
+          
+          echo "Generated marketplace.json:"
+          cat .claude-plugin/marketplace.json
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/marketplace.json plugins/*/.claude-plugin/plugin.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update marketplace and plugin manifests"
+            git push
+          fi
